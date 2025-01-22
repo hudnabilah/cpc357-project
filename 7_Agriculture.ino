@@ -1,7 +1,3 @@
-/*
-  ESP32 publish telemetry data to VOne Cloud (Agriculture)
-*/
-
 #include "VOneMqttClient.h"
 #include "DHT.h"
 #include <ESP32Servo.h>
@@ -12,37 +8,30 @@ int MaxMoistureValue = 1800;
 int MinMoisture = 0;
 int MaxMoisture = 100;
 int Moisture = 0;
+unsigned long lastHumidityTime = 0;
+unsigned long lastMoistureTime = 0;
+const unsigned long HUMIDITY_INTERVAL = 30000; //5 minutes in miliseconds
+const unsigned long MOISTURE_INTERVAL = 30000; //15 minutes in miliseconds
 
 // Define device IDs
 const char* DHT11Sensor = "33cb803d-a0bc-4889-bf82-a4a1a5752d7c";     
 const char* MoistureSensor = "b2869c48-87d5-4316-ac54-eecb9fa89fa0"; 
-const char* ServoMotor = "6325f25b-4dd8-483e-99eb-8d64c25f2a96";
+const char* ServoMotor = "6325f25b-4dd8-483e-99eb-8d64c25f2a9";
 const char* Relay ="52fdc5f5-5266-438b-8a59-0d5bd9808685";
+
 // Pin definitions
-const int dht11Pin = 42;       // Right side Maker Port
-const int moisturePin = A2;    // Middle Maker Port
-const int servoPin = 5;        // Servo motor pin
-const int relayPin = 39;       // Relay pin (controls water pump)
-// const int buzzer = 12;
+const int dht11Pin = 42;      
+const int moisturePin = A2;    
+const int servoPin = 5;        
+const int relayPin = 39;       
 
-// OUTPUT
 Servo roofServo;
-
-// Input sensor
 #define DHTTYPE DHT11
 DHT dht(dht11Pin, DHTTYPE);
-
-
-// Create an instance of VOneMqttClient
 VOneMqttClient voneClient;
-
-// Last message time
-unsigned long lastMsgTime = 0;
-const unsigned long CUSTOM_INTERVAL = 5000; // 5 seconds interval
 
 void setup_wifi() {
   delay(10);
-  // Connecting to WiFi network
   Serial.println();
   Serial.print("Connecting to ");
   Serial.println(WIFI_SSID);
@@ -61,57 +50,37 @@ void setup_wifi() {
   Serial.println(WiFi.localIP());
 }
 
-void triggerActuator_callback(const char* actuatorDeviceId, const char* actuatorCommand)
-{
-    Serial.print("Main received callback: ");
-    Serial.print(actuatorDeviceId);
-    Serial.print(" : ");
-    Serial.println(actuatorCommand);
-
+void triggerActuator_callback(const char* actuatorDeviceId, const char* actuatorCommand) {
     String errorMsg = "";
-
     JSONVar commandObjct = JSON.parse(actuatorCommand);
     JSONVar keys = commandObjct.keys();
 
-    if (String(actuatorDeviceId) == ServoMotor)
-    {
+    if (String(actuatorDeviceId) == ServoMotor) {
       String key = "";
       JSONVar commandValue = "";
       for (int i = 0; i < keys.length(); i++) {
         key = (const char* )keys[i];
         commandValue = commandObjct[keys[i]];
       }
-      Serial.print("Key : ");
-      Serial.println(key.c_str());
-      Serial.print("value : ");
-      Serial.println(commandValue);
-
       int angle = (int)commandValue;
       roofServo.write(angle);
-      voneClient.publishActuatorStatusEvent(actuatorDeviceId, actuatorCommand, errorMsg.c_str(), true);//publish actuator status
-    }
-    else
-    {
-      Serial.print(" No actuator found : ");
-      Serial.println(actuatorDeviceId);
+      voneClient.publishActuatorStatusEvent(actuatorDeviceId, actuatorCommand, errorMsg.c_str(), true);
+    } else {
       errorMsg = "No actuator found";
-      voneClient.publishActuatorStatusEvent(actuatorDeviceId, actuatorCommand, errorMsg.c_str(), false);//publish actuator status
+      voneClient.publishActuatorStatusEvent(actuatorDeviceId, actuatorCommand, errorMsg.c_str(), false);
     }
 }
 
 void setup() {
   Serial.begin(115200);
-
   setup_wifi();
   voneClient.setup();
   voneClient.registerActuatorCallback(triggerActuator_callback);
-
-  // Sensor and actuator initialization
   dht.begin();
   roofServo.attach(servoPin);
   roofServo.write(0);
   pinMode(relayPin, OUTPUT);
-  digitalWrite(relayPin, LOW); // Ensure relay is off initially
+  digitalWrite(relayPin, LOW);
 }
 
 void loop() {
@@ -122,10 +91,12 @@ void loop() {
   }
   voneClient.loop();
 
-  unsigned long cur = millis();
-  if (cur - lastMsgTime > INTERVAL) {
-    lastMsgTime = cur;
+  unsigned long currentTime = millis();
 
+  // Handle humidity sensor every 5 minutes
+  if (currentTime - lastHumidityTime > HUMIDITY_INTERVAL) {
+    lastHumidityTime = currentTime;
+    
     // Read DHT11 sensor values
     float h = dht.readHumidity();
     int t = dht.readTemperature();
@@ -136,30 +107,39 @@ void loop() {
     voneClient.publishTelemetryData(DHT11Sensor, payloadObject);
 
     // Humidity-based roof control
-    if (h > 75 || h < 65) { // High humidity, open roof
-      roofServo.write(90); // Open roof
+    if (h > 75 || h < 65) {
+      roofServo.write(90);
       Serial.println("High or Low humidity detected. Roof opened.");
-    } else if (h == 75 || h == 65) { // Low humidity, close roof
-      roofServo.write(45); // Neutral
+      voneClient.publishActuatorStatusEvent(ServoMotor, "{\"angle\":90}", "", true);
+    } else if (h == 75 || h == 65) {
+      roofServo.write(45);
       Serial.println("Min Max humidity detected. Roof in Neural Position.");
+      voneClient.publishActuatorStatusEvent(ServoMotor, "{\"angle\":45}", "", true);
     } else {
-      roofServo.write(0); // close roof
+      roofServo.write(0);
       Serial.println("Optimal humidity. Roof closed.");
+      voneClient.publishActuatorStatusEvent(ServoMotor, "{\"angle\":0}", "", true);
     }
+  }
 
+  // Handle moisture sensor every 15 minutes
+  if (currentTime - lastMoistureTime > MOISTURE_INTERVAL) {
+    lastMoistureTime = currentTime;
+    
     // Read soil moisture values
     int sensorValue = analogRead(moisturePin);
     Moisture = map(sensorValue, MinMoistureValue, MaxMoistureValue, MinMoisture, MaxMoisture);
     voneClient.publishTelemetryData(MoistureSensor, "Soil moisture", Moisture);
 
     // Moisture-based irrigation control
-    if (Moisture < 30) { // Low soil moisture
-      // tone(buzzer, 1000);
-      digitalWrite(relayPin, HIGH); // Turn on water pump
+    if (Moisture < 30) {
+      digitalWrite(relayPin, HIGH);
       Serial.println("Low soil moisture detected. Water pump activated.");
+      voneClient.publishActuatorStatusEvent(Relay, "{\"state\":\"ON\"}", "", true);
     } else {
-      digitalWrite(relayPin, LOW); // Turn off water pump
+      digitalWrite(relayPin, LOW);
       Serial.println("Soil moisture adequate. Water pump deactivated.");
+      voneClient.publishActuatorStatusEvent(Relay, "{\"state\":\"OFF\"}", "", true);
     }
   }
 }
