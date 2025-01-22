@@ -10,14 +10,14 @@ int MaxMoisture = 100;
 int Moisture = 0;
 unsigned long lastHumidityTime = 0;
 unsigned long lastMoistureTime = 0;
-const unsigned long HUMIDITY_INTERVAL = 30000; //5 minutes in miliseconds
-const unsigned long MOISTURE_INTERVAL = 30000; //15 minutes in miliseconds
+const unsigned long HUMIDITY_INTERVAL = 30000; //30 seconds in miliseconds
+const unsigned long MOISTURE_INTERVAL = 30000; //30 seconds in miliseconds
 
 // Define device IDs
-const char* DHT11Sensor = "33cb803d-a0bc-4889-bf82-a4a1a5752d7c";     
+const char* DHT11Sensor = "33cb803d-a0bc-4889-bf82-a4a1a5752d7c";    
 const char* MoistureSensor = "b2869c48-87d5-4316-ac54-eecb9fa89fa0"; 
-const char* ServoMotor = "6325f25b-4dd8-483e-99eb-8d64c25f2a9";
-const char* Relay ="52fdc5f5-5266-438b-8a59-0d5bd9808685";
+const char* ServoMotor = "5c618bff-9d78-4e1f-9253-743509646b62";
+const char* Relay ="bb952f6c-5320-40fa-ac1b-61b548736e1f";
 
 // Pin definitions
 const int dht11Pin = 42;      
@@ -56,18 +56,30 @@ void triggerActuator_callback(const char* actuatorDeviceId, const char* actuator
     JSONVar keys = commandObjct.keys();
 
     if (String(actuatorDeviceId) == ServoMotor) {
-      String key = "";
-      JSONVar commandValue = "";
-      for (int i = 0; i < keys.length(); i++) {
-        key = (const char* )keys[i];
-        commandValue = commandObjct[keys[i]];
-      }
-      int angle = (int)commandValue;
-      roofServo.write(angle);
-      voneClient.publishActuatorStatusEvent(actuatorDeviceId, actuatorCommand, errorMsg.c_str(), true);
-    } else {
-      errorMsg = "No actuator found";
-      voneClient.publishActuatorStatusEvent(actuatorDeviceId, actuatorCommand, errorMsg.c_str(), false);
+        String key = "";
+        JSONVar commandValue = "";
+        for (int i = 0; i < keys.length(); i++) {
+            key = (const char*)keys[i];
+            commandValue = commandObjct[keys[i]];
+        }
+        int angle = (int)commandValue;
+        roofServo.write(angle);
+        voneClient.publishActuatorStatusEvent(actuatorDeviceId, actuatorCommand, errorMsg.c_str(), true);
+    } 
+    else if (String(actuatorDeviceId) == Relay) {
+        String state = (const char*)commandObjct["state"];
+        if (state == "ON") {
+            digitalWrite(relayPin, HIGH);
+            Serial.println("Water pump activated via command.");
+        } else if (state == "OFF") {
+            digitalWrite(relayPin, LOW);
+            Serial.println("Water pump deactivated via command.");
+        }
+        voneClient.publishActuatorStatusEvent(actuatorDeviceId, actuatorCommand, errorMsg.c_str(), true);
+    }
+    else {
+        errorMsg = "No actuator found";
+        voneClient.publishActuatorStatusEvent(actuatorDeviceId, actuatorCommand, errorMsg.c_str(), false);
     }
 }
 
@@ -108,13 +120,13 @@ void loop() {
 
     // Humidity-based roof control
     if (h > 75 || h < 65) {
-      roofServo.write(90);
+      roofServo.write(60);
       Serial.println("High or Low humidity detected. Roof opened.");
-      voneClient.publishActuatorStatusEvent(ServoMotor, "{\"angle\":90}", "", true);
+      voneClient.publishActuatorStatusEvent(ServoMotor, "{\"angle\":60}", "", true);
     } else if (h == 75 || h == 65) {
-      roofServo.write(45);
+      roofServo.write(30);
       Serial.println("Min Max humidity detected. Roof in Neural Position.");
-      voneClient.publishActuatorStatusEvent(ServoMotor, "{\"angle\":45}", "", true);
+      voneClient.publishActuatorStatusEvent(ServoMotor, "{\"angle\":30}", "", true);
     } else {
       roofServo.write(0);
       Serial.println("Optimal humidity. Roof closed.");
@@ -132,7 +144,7 @@ void loop() {
     voneClient.publishTelemetryData(MoistureSensor, "Soil moisture", Moisture);
 
     // Moisture-based irrigation control
-    if (Moisture < 30) {
+    if (Moisture < 70) {
       digitalWrite(relayPin, HIGH);
       Serial.println("Low soil moisture detected. Water pump activated.");
       voneClient.publishActuatorStatusEvent(Relay, "{\"state\":\"ON\"}", "", true);
